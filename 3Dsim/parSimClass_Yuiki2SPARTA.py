@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 """
-Modified by Yuiki Takahashi in 2020
+Modified by Yuiki Takahashi & Cal Miller in 2020
 
 Created August 2019
 @author: Gabriel
@@ -27,6 +27,9 @@ import sys
 import joblib.parallel
 from scipy.stats import uniform
 from numpy import random, linalg
+from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.ops import polygonize
+
 
 ###############################################################################
 # CONSTANTS
@@ -61,7 +64,7 @@ class ParticleTracing_Yuiki(object):
     gas flow field, etc.
     '''
 
-    def __init__(self, flowFieldName='flows/F_Cell/DS2f005.DAT', NPAR=10, CROSS_MULT=1, LITE_MODE=True, INIT_COND=0, PROBE_MODE=False, CORRECTION=1):
+    def __init__(self, flowFieldName='flows/F_Cell/DS2f005.DAT', NPAR=10, CROSS_MULT=1, LITE_MODE=True, INIT_COND=0, PROBE_MODE=False, CORRECTION=1, geometryName=None, flowrate=None):
 
         #Set as 0 for basic Maxwell-Boltzmann PDF
         #Set as 1 for corrected PDF
@@ -87,7 +90,7 @@ class ParticleTracing_Yuiki(object):
                            'qCell' : (0.064, 0.12),\
                            'rCell' : (0.064, 0.12),\
                            'yCell' : (0.053, 0.12),\
-                           'tCell' : (0.0886, 0.24)\
+                           'tCell' : (0.0886, 0.24),\
                            }
 
         #Probability of collision, set at 1/10. Higher probability means finer time-step
@@ -97,9 +100,8 @@ class ParticleTracing_Yuiki(object):
         # Load cell geometry and flow field
         # =============================================================================
         self._FF = flowFieldName #Filename for DSMC output file
-        self.set_flow_type(flowFieldName)
-
-
+        self.set_flow_type(flowFieldName, geometryName=geometryName, flowrate=flowrate)
+        
         self._PARTICLE_NUMBER = NPAR #Number of particles to simulate
         self._CROSS_MULT = CROSS_MULT #Fine-tuning colllision cross section parameter
 
@@ -119,7 +121,7 @@ class ParticleTracing_Yuiki(object):
         self._Theta_cv = Theta_pdf(a=np.pi/2, b=np.pi, name='Theta_pdf') # Theta_cv.rvs() for value
         # ***** End of class constructor ****** #
 
-    def set_flow_type(self, FF):
+    def set_flow_type(self, FF, flowrate=None, geometryName=None):
         '''
         Loads DSMC output file FF and uses bivariate spline method to set gas characteristics
         on a grid of points.
@@ -141,21 +143,36 @@ class ParticleTracing_Yuiki(object):
         try:
             #Geometry is a string in ['fCell', 'gCell', 'hCell', ..., 'pCell', 'rCell', ...]
             #Flowrate is an integer in [2, 5, ..., 200] (SCCM)
+            
+            if geometryName is None or flowrate is None:
+                geometry, flowrate = get_flow_chars(self._FF)
+            else:
+                geometry = 'SPARTA'
+                self._bounds = np.loadtxt(geometryName, skiprows=5, max_rows=2)
+                geom = np.loadtxt(geometryName, skiprows=9)[:,1:]
+                lines = [((l[0], l[1]),(l[2], l[3])) for l in geom]
+                polygons = polygonize(lines)
+                self._multipolygon = MultiPolygon(polygons)
+                self._knownGeometries['SPARTA'] = (np.max(self._multipolygon.envelope.exterior.xy[0]), self._bounds[0,1])
 
-            geometry, flowrate = get_flow_chars(self._FF)
 
             self._geometry = geometry
             self._flowrate = flowrate
             # print("Loading flow field: geometry {0}, flowrate {1} SCCM".format(geometry,self._flowrate))
-
-            flowField = np.loadtxt(self._FF, skiprows=1) # Assumes only first row is not data.
+            
+            if geometry is 'SPARTA':
+                flowField = np.loadtxt(self._FF, skiprows=9) # Assumes SPARTA dump format
+            else: 
+                flowField = np.loadtxt(self._FF, skiprows=1) # Assumes only first row is not data.
 
             zs, rs, dens, temps = flowField[:, 0], flowField[:, 1], flowField[:, 3], flowField[:, 2] #Arrays of z and r coordinates, density and temperature
             vzs, vrs, vps = flowField[:, 5], flowField[:, 6], flowField[:, 7] #velocity field in z, r, and "perpendicular" directions
             quantHolder = [zs, rs, dens, temps, vzs, vrs, vps]
 
             #modify this part - add the neme of the cell you define here - by Yuiki
-            if geometry in ['fCell', 'gCell', 'nCell', 'qCell', 'rCell']:
+            if geometry is 'SPARTA':
+                grid_x, grid_y = np.mgrid[self._bounds[0,0]:self._bounds[0,1]:2250j, self._bounds[1,0]:self._bounds[1,1]:750j]
+            elif geometry in ['fCell', 'gCell', 'nCell', 'qCell', 'rCell']:
                 grid_x, grid_y = np.mgrid[0.010:0.12:2250j, 0:0.030:750j] # high density, to be safe. Was 4500 x 1500 points
             elif geometry in ['hCell', 'jCell', 'kCell', 'mCell']:
                 grid_x, grid_y = np.mgrid[0.010:0.24:9400j, 0:0.030:1500j] # high density, to be safe.
@@ -310,6 +327,10 @@ class ParticleTracing_Yuiki(object):
         PROBE_MODE = self._PROBE_MODE
 
         cellGeometry = self._geometry
+        if cellGeometry == 'SPARTA':
+            poly = self._multipolygon
+        else:
+            poly = None
         default_aperture = self._knownGeometries[cellGeometry][0] #z location of cell aperture
         traj = []
 
@@ -332,7 +353,7 @@ class ParticleTracing_Yuiki(object):
                                                 round(vx,2), round(vy,2), round(vz,2), round(1000*simTime,4) ] ) )+'\n')
 
             #Iterate updateParams() and update the particle position
-            while inBounds(x, y, z, cellGeometry, endPos):
+            while inBounds(x, y, z, cellGeometry, endPos, poly):
 
                 bgFlow, bgDens, bgTemp = self.update_buffer_gas(x, y, z)
                 dt, no_collide = self.get_derived_quants(temp=bgTemp, dens=bgDens, prev_dt=dt)
@@ -352,7 +373,7 @@ class ParticleTracing_Yuiki(object):
                 z += vz * dt
                 simTime += dt
 
-            if z > endPos:
+            if z > endPos or np.sqrt(x**2 + y**2 + z**2) > 2*endPos:
                 # Linearly backtrack to boundary
                 simTime -= (z-endPos) / vz
                 z = endPos
@@ -922,13 +943,14 @@ def accept_reject_gen(pdf, n=1, xmin=0, xmax=1, pmax=None):
 #modify this part - add the boundary of the cell in this function.
 #It would be nice to load the cell geometry and thus the boundary of the cell automatically
 #cell is just the name of the cell that previous person was using, but many functions above use these names to define the cell geometry, so it might be tricky to remove those names - by Yuiki 4/3/2020
-def inBounds(x, y, z, cell=None, endPos=0.12):
+def inBounds(x, y, z, cell=None, endPos=0.12, poly=None):
     '''
     Return Boolean value for whether or not a position is within
     the boundary of "cell".
     '''
     r = np.sqrt(x**2+y**2)
-
+    if cell == 'SPARTA':
+        return z < endPos and not poly.contains(Point((z,r))) and np.sqrt(z**2 + r**2) < 2*endPos
     if cell == 'fCell':
         in1 = r < 0.00635 and z > 0.015 and z < 0.0635
         in2 = r < 0.0025 and z > 0.0635 and z < 0.0640

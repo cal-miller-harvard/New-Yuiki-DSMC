@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-modified by Yuiki Takahashi in 2020
+modified by Yuiki Takahashi & Cal Miller in 2020
 
 Created on Wed Jun 20 15:43:30 2018
 
@@ -16,6 +16,9 @@ import plotly as plo
 import plotly.graph_objs as go
 import scipy.integrate as integrate
 import scipy.optimize as opt
+from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.ops import polygonize
+
 
 from scipy.stats import norm
 import matplotlib.mlab as mlab
@@ -833,7 +836,7 @@ def Integrand(x,z, fVz1, fDens1):
 
 
 
-def analyzeTrajData(file_ext, folder, write_file=None, pos=0.064, write=False, plots=False,rad_mode=False, dome_rad=0.02,debug=False,window=False):
+def analyzeTrajData(file_ext, folder, write_file=None, pos=0.064, write=False, plots=False,rad_mode=False, dome_rad=0.02, debug=False,window=False, geom_ext=None, flowrate=None):
     '''
     Running a Parallel open trajectory script produces a file with six columns;
     three each for positions and velocities.
@@ -860,20 +863,29 @@ def analyzeTrajData(file_ext, folder, write_file=None, pos=0.064, write=False, p
 
     except:
         PREV_AP_RAD = 0.0
-
-    #This should be 120 for F,G and Y geometries, 240 for H, J, K geometries
-    #modify this part - add the name of the cell and endposition in meters - by Yuiki
-    DEFAULT_ENDPOS = {'f':120, 'g':120, 'y':120, 't':240,\
-                      'h':240, 'j':240, 'k':240, 'm':240,\
-                      'p':200, 'n':140, 'q':120, 'r':120}[file_ext[0]]
-
-    #0.064 for f and g cell geometries, 0.06785 for h, j, k cells. Only matters for print
-    #output, not for data analysis
-    #modify this part - add the name of the cell and aperture position in meters - by Yuiki
-    DEFAULT_APERTURE = {'f':0.064, 'g':0.064,'y':0.0536,'t':0.0886,\
-                        'h':0.06785, 'j':0.06785, 'k':0.06785, 'm':0.06785,\
-                        'p':0.0726,'n':0.073,'q':0.064, 'r':0.064}[file_ext[0]]
     
+    if geom_ext is not None:
+        bounds = np.loadtxt(geom_ext, skiprows=5, max_rows=2)
+        geom = np.loadtxt(geom_ext, skiprows=9)[:,1:]
+        lines = [((l[0], l[1]),(l[2], l[3])) for l in geom]
+        polygons = polygonize(lines)
+        multipolygon = MultiPolygon(polygons)
+        DEFAULT_ENDPOS = bounds[0,1]
+        DEFAULT_APERTURE = np.max(multipolygon.envelope.exterior.xy[0])
+    else:
+        #This should be 120 for F,G and Y geometries, 240 for H, J, K geometries
+        #modify this part - add the name of the cell and endposition in meters - by Yuiki
+        DEFAULT_ENDPOS = {'f':120, 'g':120, 'y':120, 't':240,\
+                          'h':240, 'j':240, 'k':240, 'm':240,\
+                          'p':200, 'n':140, 'q':120, 'r':120}[file_ext[0]]
+
+        #0.064 for f and g cell geometries, 0.06785 for h, j, k cells. Only matters for print
+        #output, not for data analysis
+        #modify this part - add the name of the cell and aperture position in meters - by Yuiki
+        DEFAULT_APERTURE = {'f':0.064, 'g':0.064,'y':0.0536,'t':0.0886,\
+                            'h':0.06785, 'j':0.06785, 'k':0.06785, 'm':0.06785,\
+                            'p':0.0726,'n':0.073,'q':0.064, 'r':0.064}[file_ext[0]]
+                
     print('The aperture is at z = %g m.'%DEFAULT_APERTURE)
 
     #64 mm for f/g, 67.85mm for h
@@ -943,19 +955,20 @@ def analyzeTrajData(file_ext, folder, write_file=None, pos=0.064, write=False, p
 #                'f20_lite':10, 'f21_lite':2, 'f22_lite':100, 'f23_lite':200}[file_ext]
 
     #modify this part - add the name of the cell and flowrate - by Yuiki
-    flowrate = {'f17':5, 'f18':20, 'f19':50, 'f20':10, 'f21':2, 'f22':100, 'f23':200,\
-                'g200':200, 'g005':5, 'g010':10, 'g020':20, 'g002':2, 'g050':50, 'g100':100,\
-                'h002':2, 'h005':5, 'h010':10, 'h020':20, 'h050':50, 'h100':100, 'h200':200,\
-                'f002':2, 'f005':5, 'f010':10, 'f020':20, 'f050':50, 'f100':100, 'f200':200,\
-                'j002':2, 'j005':5, 'j010':10, 'j020':20, 'j050':50, 'j100':100, 'j200':200,\
-                'k002':2, 'k005':5, 'k010':10, 'k020':20, 'k050':50, 'k100':100, 'k200':200,\
-                'm002':2, 'm005':5, 'm010':10, 'm020':20, 'm050':50, 'm100':100, 'm200':200,\
-                'n002':2, 'n005':5, 'n010':10, 'n020':20, 'n050':50, 'n100':100, 'n200':200,\
-                'p002':2, 'p005':5, 'p010':10, 'p020':20, 'p050':50, 'p100':100, 'p200':200,\
-                'q002':2, 'q005':5, 'q010':10, 'q020':20, 'q050':50, 'q100':100, 'q200':200,\
-                'r002':2, 'r005':5, 'r010':10, 'r020':20, 'r050':50, 'r100':100, 'r200':200,\
-                't901':0.1,'t905':0.5, 't001':1,'t002':2, 't005':5, 't010':10, 't020':20, 't050':50, 't100':100, 't200':200,\
-                'y901':0.1,'y905':0.5, 'y001':1,'y002':2, 'y005':5, 'y010':10, 'y025':25, 'y050':50, 'y100':100, 'y250':250}[file_ext]
+    if flowrate is None:
+        flowrate = {'f17':5, 'f18':20, 'f19':50, 'f20':10, 'f21':2, 'f22':100, 'f23':200,\
+                    'g200':200, 'g005':5, 'g010':10, 'g020':20, 'g002':2, 'g050':50, 'g100':100,\
+                    'h002':2, 'h005':5, 'h010':10, 'h020':20, 'h050':50, 'h100':100, 'h200':200,\
+                    'f002':2, 'f005':5, 'f010':10, 'f020':20, 'f050':50, 'f100':100, 'f200':200,\
+                    'j002':2, 'j005':5, 'j010':10, 'j020':20, 'j050':50, 'j100':100, 'j200':200,\
+                    'k002':2, 'k005':5, 'k010':10, 'k020':20, 'k050':50, 'k100':100, 'k200':200,\
+                    'm002':2, 'm005':5, 'm010':10, 'm020':20, 'm050':50, 'm100':100, 'm200':200,\
+                    'n002':2, 'n005':5, 'n010':10, 'n020':20, 'n050':50, 'n100':100, 'n200':200,\
+                    'p002':2, 'p005':5, 'p010':10, 'p020':20, 'p050':50, 'p100':100, 'p200':200,\
+                    'q002':2, 'q005':5, 'q010':10, 'q020':20, 'q050':50, 'q100':100, 'q200':200,\
+                    'r002':2, 'r005':5, 'r010':10, 'r020':20, 'r050':50, 'r100':100, 'r200':200,\
+                    't901':0.1,'t905':0.5, 't001':1,'t002':2, 't005':5, 't010':10, 't020':20, 't050':50, 't100':100, 't200':200,\
+                    'y901':0.1,'y905':0.5, 'y001':1,'y002':2, 'y005':5, 'y010':10, 'y025':25, 'y050':50, 'y100':100, 'y250':250}[file_ext]
     
     # FYI, this part is explicitly integrating the He flux at the aperture of the inlet and calculate the SCCM value for t geometry, which is created by Yuiki in 2020
     if file_ext[0] in ['t']:
@@ -1035,8 +1048,10 @@ def analyzeTrajData(file_ext, folder, write_file=None, pos=0.064, write=False, p
             if debug:
                 print("Writing to debug file on j={}, file row {}, block {}".format(j, i-1, 'B'))
                 #debugf.write(' '.join(map(str, [i-1, round(x,3), round(y,3), pos, round(tim,4), j] ) )+' 02\n')
-
-            finals[j] = np.array([x, y, pos, vx, vy, vz, tim, r, theta])
+            try:
+                finals[j] = np.array([x, y, pos, vx, vy, vz, tim, r, theta])
+            except IndexError:
+                pass
             #finals = np.append(finals, np.array([x, y, pos, vx, vy, vz, tim, r, theta]),axis=0)
 
             j += 1
@@ -1100,15 +1115,20 @@ def analyzeTrajData(file_ext, folder, write_file=None, pos=0.064, write=False, p
         zs = finals[:, 2] / 1000.
         colour = plt.cm.Greens(100)
         plt.plot(zs, np.sqrt(xs**2+ys**2), '+', c=colour, ms=13)
-        plt.vlines(0.015, 0, 0.002, colors='gray', linewidths=.5)
-        plt.hlines(0.002, 0.015, 0.035, colors='gray', linewidths=.5)
-        plt.vlines(0.035, 0.002, 0.00635, colors='gray', linewidths=.5)
-        plt.hlines(0.00635, 0.035, 0.0881, colors='gray', linewidths=.5)
-        plt.vlines(0.0881, 0.00635, 0.0025, colors='gray', linewidths=.5)
-        plt.hlines(0.0025, 0.0881, 0.0886, colors='gray', linewidths=.5)
-        plt.vlines(0.0886, 0.0025, 0.009, colors='gray', linewidths=.5)
-        plt.hlines(0.009, 0, 0.0886, colors='gray', linewidths=.5)
-        plt.xlim(0, pos0+0.01)
+        if geom_ext is not None:
+            for p in multipolygon:
+                plt.plot(*p.exterior.xy)
+            plt.show()
+        else:
+            plt.vlines(0.015, 0, 0.002, colors='gray', linewidths=.5)
+            plt.hlines(0.002, 0.015, 0.035, colors='gray', linewidths=.5)
+            plt.vlines(0.035, 0.002, 0.00635, colors='gray', linewidths=.5)
+            plt.hlines(0.00635, 0.035, 0.0881, colors='gray', linewidths=.5)
+            plt.vlines(0.0881, 0.00635, 0.0025, colors='gray', linewidths=.5)
+            plt.hlines(0.0025, 0.0881, 0.0886, colors='gray', linewidths=.5)
+            plt.vlines(0.0886, 0.0025, 0.009, colors='gray', linewidths=.5)
+            plt.hlines(0.009, 0, 0.0886, colors='gray', linewidths=.5)
+            plt.xlim(0, pos0+0.01)
         #plt.xlim(0, pos0+0.01)
         plt.show()
         plt.clf()
